@@ -34,6 +34,8 @@ LearningHumanoidWalking/
   - matplotlib
   - scipy
 
+pip install -r requirements.txt
+
 ## Usage:
 
 Environment names supported:  
