@@ -1,3 +1,8 @@
+'''
+robot_interface：基于mujoco的机器人接口类，封装，提供对机器人状态、关节、执行器、接触力等信息的访问和控制方法。
+可熟悉有关mujoco的API和机器人动力学的知识。
+'''
+
 import numpy as np
 import transforms3d as tf3
 import mujoco
@@ -55,6 +60,7 @@ class RobotInterface(object):
         Returns speed limits of the *actuator* in radians per sec.
         This assumes the actuator 'user' element defines speed limits
         at the actuator level in revolutions per minute.
+        电机转速 = 电机转速限制（RPM） × 2π/60
         """
         rpm_limits = self.model.actuator_user[:,0] # RPM
         return ((rpm_limits)*(2*np.pi/60)).tolist() # radians per sec
@@ -64,6 +70,7 @@ class RobotInterface(object):
         Returns speed limits of the *joint* in radians per sec.
         This assumes the actuator 'user' element defines speed limits
         at the actuator level in revolutions per minute.
+        关节转速 = 电机转速 ÷ 减速比
         """
         gear_ratios = self.model.actuator_gear[:,0]
         mot_lims = self.get_motor_speed_limits()
@@ -120,8 +127,9 @@ class RobotInterface(object):
         """
         gear_ratios = self.model.actuator_gear[:,0]
         motor_torques = self.data.actuator_force.tolist()
-        return [float(i*j) for i,j in zip(motor_torques, gear_ratios)]
-
+        #gear_ratios:电机转矩与关节转矩的比值，关节转矩 = 电机转矩 × 减速比
+        return [float(i*j) for i,j in zip(motor_torques, gear_ratios)]  
+      
     def get_act_joint_positions(self):
         """
         Returns position of actuators at joint level.
@@ -165,6 +173,7 @@ class RobotInterface(object):
     def get_root_body_vel(self):
         qveladr = self.get_jnt_qveladr_by_name("root")
         return self.data.qvel[qveladr:qveladr+6].copy()
+        
 
     def get_sensordata(self, sensor_name):
         sensor_id = self.model.sensor(sensor_name)
@@ -202,9 +211,9 @@ class RobotInterface(object):
         floor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, self.floor_body_name)
         lfoot_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, self.lfoot_body_name)
         for i,c in enumerate(contacts):
-            geom1_is_floor = (self.model.geom_bodyid[c.geom1]==floor_id)
-            geom2_is_lfoot = (self.model.geom_bodyid[c.geom2]==lfoot_id)
-            if (geom1_is_floor and geom2_is_lfoot):
+            g1 = self.model.geom_bodyid[c.geom1]
+            g2 = self.model.geom_bodyid[c.geom2]
+            if(g1==floor_id and g2==lfoot_id  or  g2==floor_id and g1==lfoot_id):
                 lcontacts.append((i,c))
         return lcontacts
 
@@ -329,6 +338,7 @@ class RobotInterface(object):
     def check_bad_collisions(self):
         """
         Returns True if there are collisions other than feet-floor.
+        除了脚与地面之间的碰撞之外，如果存在其他碰撞，则返回True。
         """
         num_rcons = len(self.get_rfoot_floor_contacts())
         num_lcons = len(self.get_lfoot_floor_contacts())
@@ -337,6 +347,7 @@ class RobotInterface(object):
     def check_self_collisions(self):
         """
         Returns True if there are collisions other than any-geom-floor.
+        除了任何几何体与地面之间的碰撞之外，如果存在其他碰撞，则返回True。
         """
         contacts = [self.data.contact[i] for i in range(self.data.ncon)]
         floor_contacts = []
@@ -357,7 +368,7 @@ class RobotInterface(object):
         self.kp = kp.copy()
         self.kv = kv.copy()
         return
-
+    #pd控制
     def step_pd(self, p, v):
         self.current_pos_target = p.copy()
         self.current_vel_target = v.copy()
@@ -400,5 +411,6 @@ class RobotInterface(object):
     def step(self):
         """
         Increment simulation by one step.
+        仿真前向推进一步，更新机器人状态和环境状态。
         """
         mujoco.mj_step(self.model, self.data)

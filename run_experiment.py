@@ -35,7 +35,19 @@ def run_experiment(args):
     Env = import_env(args.env)
 
     # wrapper function for creating parallelized envs
+    #partial 就是帮你把 "参数" 提前塞进函数里，变成一个 "一键启动" 的按钮。
+    #用于并行环境
     env_fn = partial(Env)
+    '''
+    镜像训练：
+    你训练机器人走 1000 步，其中：
+    600 步是左腿在前，400 步是右腿在前
+    数据分布是歪的，模型可能就学偏了 —— 左腿迈得特别好，右腿就拉胯。
+    镜像一下，数据就 "正" 了：
+    原来的 600 步左腿 → 镜像出 600 步右腿
+    原来的 400 步右腿 → 镜像出 400 步左腿
+    现在各 1000 步，左右完全均衡
+    '''
     if not args.no_mirror:
         try:
             print("Wrapping in SymmetricEnv.")
@@ -45,18 +57,21 @@ def run_experiment(args):
                              clock_inds=env_fn().robot.clock_inds)
         except AttributeError as e:
             print("Warning! Cannot use SymmetricEnv.", e)
+
+    #获取state、action 维度（个数）
     obs_dim = env_fn().observation_space.shape[0]
     action_dim = env_fn().action_space.shape[0]
 
-    # Set up Parallelism
-    os.environ['OMP_NUM_THREADS'] = '1'
+    # Set up Parallelism 开启并行训练
+    os.environ['OMP_NUM_THREADS'] = '1' #每个进程开一个线程
     if not ray.is_initialized():
-        ray.init(num_cpus=args.num_procs)
+        ray.init(num_cpus=args.num_procs) #开几个cpu核 就开几个环境训练
 
-    # Set seeds
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-
+    # Set seeds 设置固定的seed，方便复现
+    torch.manual_seed(args.seed) #手动把 PyTorch 的随机数生成器初始化为种子 seed
+    np.random.seed(args.seed) #手动把 np 的随机数生成器初始化为种子 seed
+    
+    #之前已有训练，继续之前的模型训练
     if args.continued:
         path_to_actor = ""
         path_to_pkl = ""
@@ -68,8 +83,10 @@ def run_experiment(args):
         policy = torch.load(path_to_actor)
         critic = torch.load(path_to_critic)
     else:
+        #否则重新构建网络
         policy = Gaussian_FF_Actor(obs_dim, action_dim, fixed_std=np.exp(args.std_dev), bounded=False)
         critic = FF_V(obs_dim)
+        #归一化计算（不更新梯度，只求mean和std来归一计算）
         with torch.no_grad():
             policy.obs_mean, policy.obs_std = map(torch.Tensor,
                                                   get_normalization_params(iter=args.input_norm_steps,
@@ -80,17 +97,18 @@ def run_experiment(args):
         critic.obs_mean = policy.obs_mean
         critic.obs_std = policy.obs_std
     
-    policy.train()
-    critic.train()
+    policy.train()  #与pytorch中，module.eval()对应
+    critic.train()  #设置为训练模式
 
-    # dump hyperparameters
+    # dump hyperparameters 保存实验配置（超参数记录）
     os.makedirs(args.logdir, exist_ok=True)
     pkl_path = os.path.join(args.logdir, "experiment.pkl")
     with open(pkl_path, 'wb') as f:
         pickle.dump(args, f)
 
     algo = PPO(args=vars(args), save_path=args.logdir)
-    algo.train(env_fn, policy, critic, args.n_itr, anneal_rate=args.anneal)
+    #训练
+    algo.train(env_fn, policy, critic, args.n_itr, anneal_rate=args.anneal)  #anneal：退火
 
 if __name__ == "__main__":
 
@@ -109,7 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--eps", type=float, default=1e-5, help="Adam epsilon (for numerical stability)")
     parser.add_argument("--lam", type=float, default=0.95, help="Generalized advantage estimate discount")
     parser.add_argument("--gamma", type=float, default=0.99, help="MDP discount")
-    parser.add_argument("--anneal", default=1.0, action='store_true', help="anneal rate for stddev")
+    parser.add_argument("--anneal", default=1.0, type=float, help="anneal rate for stddev")  #退火 0.995
     parser.add_argument("--std_dev", type=int, default=-1.5, help="exponent of exploration std_dev")
     parser.add_argument("--entropy_coeff", type=float, default=0.0, help="Coefficient for entropy regularization")
     parser.add_argument("--clip", type=float, default=0.2, help="Clipping parameter for PPO surrogate loss")

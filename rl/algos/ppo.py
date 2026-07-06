@@ -35,6 +35,7 @@ class PPOBuffer:
         self.rewards = []   # 奖励序列
         self.values  = []   # 值函数估计序列
         self.returns = []   # 回报序列（用于训练critic）
+        self.advantages = []  # 优势函数序列（用于训练actor）
 
         # 用于记录和日志的统计信息
         self.ep_returns = [] # 每个episode的总回报
@@ -42,7 +43,7 @@ class PPOBuffer:
 
         # 折扣因子和GAE参数
         self.gamma, self.lam = gamma, lam
-
+        self.use_gae = use_gae
         # 指针和轨迹索引
         self.ptr = 0           # 当前缓冲区位置
         self.traj_idx = [0]    # 轨迹开始位置的索引列表
@@ -58,30 +59,40 @@ class PPOBuffer:
         将一个时间步的智能体-环境交互数据添加到缓冲区
         """
         # TODO: 确保这些维度确实合理
-        self.states  += [state.squeeze(0)]   # 移除批次维度
+        self.states  += [state.squeeze(0)]   # 移除batch维度
         self.actions += [action.squeeze(0)]  # 移除批次维度
         self.rewards += [reward.squeeze(0)]  # 移除批次维度
         self.values  += [value.squeeze(0)]   # 移除批次维度
 
         self.ptr += 1
 
+    #use_gae=False
     def finish_path(self, last_val=None):
         """完成一个轨迹的处理，计算回报"""
         # 记录当前轨迹结束位置
         self.traj_idx += [self.ptr]
-        # 获取当前轨迹的奖励序列
+        # 获取当前轨迹的奖励序列 -2:倒数第二个索引，-1:最后一个索引
         rewards = self.rewards[self.traj_idx[-2]:self.traj_idx[-1]]
 
         returns = []
 
         # 使用最后一个状态的值函数估计作为bootstrap值
         R = last_val.squeeze(0).copy()  # 避免复制？
+
         # 反向计算折扣回报
+        #reversed()函数返回一个反向迭代器，允许我们从最后一个奖励开始计算回报
+        '''
+        折扣回报
         for reward in reversed(rewards):
-            R = self.gamma * R + reward
-            returns.insert(0, R)  # TODO: 在开头插入，保持顺序
-                                  # 技术上这是O(k^2)，可能值得反转列表
-                                  # BUG? 这里通过引用添加了R的副本？
+            R = self.gamma * R + reward  # G_t = reward_t + γ * G_t+1
+            returns.insert(0, R)  # insert(0,R) 在序列开头插入R
+                                  #最后形成[G0, G1, G2, ..., Gn]的形式
+                                  #复杂程度O(n^2)
+        '''
+        for reward in reversed(rewards):
+            R = self.gamma * R + reward  # G_t = reward_t + γ * G_t+1
+            returns.append(R)  
+        returns.reverse()  # 反转回到正确的顺序，复杂度O(n)
 
         self.returns += returns
 
@@ -89,13 +100,54 @@ class PPOBuffer:
         self.ep_returns += [np.sum(rewards)]  # 总回报
         self.ep_lens    += [len(rewards)]     # 轨迹长度
 
+    #use_gae=True
+    def calculate_gae(self,last_val=None):
+        '''
+        计算广义优势估计（GAE）
+        在每个episode结束时调用calculate_gae()，计算每个时间步的优势函数
+        不能与finish_path()同时使用，因为finish_path()已经计算了回报
+        '''
+        advantages = []
+        gae = 0
+        last_val = last_val.squeeze(0).copy()  
+
+        # 记录当前轨迹结束位置
+        self.traj_idx += [self.ptr]
+        start = self.traj_idx[-2]
+        end = self.traj_idx[-1]
+
+        rewards = self.rewards[start:end]
+        values = self.values[start:end]
+        values = values + [last_val]  # 添加最后一个状态的值函数估计
+
+        for i in reversed(range(len(rewards))):
+            td_delta = rewards[i] + self.gamma * values[i + 1] - values[i]
+            gae = td_delta + self.gamma * self.lam * gae
+            advantages.append(gae)
+        advantages.reverse()  # 反转回到正确的顺序
+
+        self.advantages+= advantages
+
+        #计算回报：Gt = A_t + V(s_t)
+        returns = [
+            adv + val for adv, val in zip(advantages, values[:-1])
+        ]
+
+        self.returns += returns
+
+        # 记录episode统计信息
+        self.ep_returns += [np.sum(rewards)]  # 总回报
+        self.ep_lens    += [len(rewards)]     # 轨迹长度
+
+
     def get(self):
         """获取所有缓冲区数据"""
         return(
             self.states,
             self.actions,
             self.returns,
-            self.values
+            self.values,
+            self.advantages,
         )
 
 class PPO:
@@ -162,6 +214,13 @@ class PPO:
         torch.save(policy, os.path.join(self.save_path, "actor" + suffix + filetype))
         torch.save(critic, os.path.join(self.save_path, "critic" + suffix + filetype))
 
+    '''
+    python写法：
+    从下往上执行：
+    先sample 采样
+    再no_grad() 禁止梯度计算
+    再ray.remote() 远程调用,并行计算
+    '''
     @ray.remote
     @torch.no_grad()
     def sample(self, env_fn, policy, critic, max_steps, max_traj_len, deterministic=False, anneal=1.0, term_thresh=0):
@@ -179,6 +238,7 @@ class PPO:
         env = WrapEnv(env_fn)  # TODO
         env.robot.iteration_count = self.iteration_count
 
+        #记忆池
         memory = PPOBuffer(self.gamma, self.lam)
         memory_full = False
 
@@ -214,10 +274,13 @@ class PPO:
                 if memory_full:
                     break
 
-            # 处理轨迹结束
+            # 处理轨迹结束，此时state:上一个episode的最后一个状态
             value = critic(state)
             # 如果轨迹没有自然结束，使用最后一个状态的值函数进行bootstrap
-            memory.finish_path(last_val=(not done) * value.numpy())
+            if self.use_gae:
+                memory.calculate_gae(last_val=(not done) * value.numpy())
+            else:   
+                memory.finish_path(last_val=(not done) * value.numpy())
 
         return memory
 
@@ -241,6 +304,7 @@ class PPO:
                 merged.rewards += buf.rewards
                 merged.values  += buf.values
                 merged.returns += buf.returns
+                merged.advantages += buf.advantages  
 
                 merged.ep_returns += buf.ep_returns
                 merged.ep_lens    += buf.ep_lens
@@ -370,15 +434,20 @@ class PPO:
 
             # 并行采样经验
             batch = self.sample_parallel(env_fn, self.policy, self.critic, self.batch_size, self.max_traj_len, anneal=curr_anneal, term_thresh=curr_thresh)
-            observations, actions, returns, values = map(torch.Tensor, batch.get())
+            observations, actions, returns, values, gae = map(torch.Tensor, batch.get())
 
             num_samples = batch.storage_size()
             elapsed = time.time() - sample_start_time
-            print("Sampling took {:.2f}s for {} steps.".format(elapsed, num_samples))
+            print(".............Sampling took {:.2f}s for {} steps............".format(elapsed, num_samples))
 
-            # 标准化优势函数
-            advantages = returns - values
-            advantages = (advantages - advantages.mean()) / (advantages.std() + self.eps)
+            if self.use_gae:
+                advantages = gae
+                advantages = (advantages - advantages.mean()) / (advantages.std() + self.eps)
+            else:
+                # 标准化优势函数
+                advantages = returns - values
+                advantages = (advantages - advantages.mean()) / (advantages.std() + self.eps)
+  
 
             minibatch_size = self.minibatch_size or num_samples
             self.total_steps += num_samples
@@ -410,6 +479,7 @@ class PPO:
                     sampler = BatchSampler(random_indices, minibatch_size, drop_last=True)
 
                 # 小批次训练
+                #indices 有minibatch_size个索引
                 for indices in sampler:
                     if self.recurrent:
                         # 处理可变长度序列
@@ -417,7 +487,7 @@ class PPO:
                         action_batch    = [actions[batch.traj_idx[i]:batch.traj_idx[i+1]] for i in indices]
                         return_batch    = [returns[batch.traj_idx[i]:batch.traj_idx[i+1]] for i in indices]
                         advantage_batch = [advantages[batch.traj_idx[i]:batch.traj_idx[i+1]] for i in indices]
-                        mask            = [torch.ones_like(r) for r in return_batch]
+                        mask            = [torch.ones_like(r) for r in return_batch] 
 
                         # 填充序列
                         obs_batch       = pad_sequence(obs_batch, batch_first=False)
@@ -431,7 +501,7 @@ class PPO:
                         action_batch    = actions[indices]
                         return_batch    = returns[indices]
                         advantage_batch = advantages[indices]
-                        mask            = 1
+                        mask            = 1   #用于前馈网络时，mask为1
 
                     # 更新策略
                     scalars = self.update_policy(obs_batch, action_batch, return_batch, advantage_batch, mask, mirror_observation=obs_mirr, mirror_action=act_mirr)
@@ -445,7 +515,7 @@ class PPO:
                     mirror_losses.append(mirror_loss.item())
                     clip_fractions.append(clip_fraction)
 
-                    # KL早停检查
+                    # KL早停检查，更新过大，这批数据可能不再适合当前策略，于是提前停止训练
                     if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                         continue_training = False
                         print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")

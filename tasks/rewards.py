@@ -188,7 +188,7 @@ def _calc_yaw_vel_reward(self, yaw_vel_ref=0):
 
 def _calc_action_reward(self, prev_action):
     """动作平滑性奖励：鼓励连续动作之间的平滑变化"""
-    action = self._client.get_pd_target()[0]  # 获取当前PD控制目标
+    action = self._client.get_pd_target()[0]  # 获取当前PD控制目标 [0]:pos
     penalty = 5 * sum(np.abs(prev_action - action)) / len(action)  # 计算动作变化的平均绝对值
     return np.exp(-penalty)  # 惩罚大的动作变化
 
@@ -209,7 +209,7 @@ def _calc_height_reward(self):
     else:
         contact_point = 0
 
-    current_height = self._client.get_object_xpos_by_name(self._root_body_name, 'OBJ_BODY')[2]  # 获取当前根身体高度
+    current_height = self._client.get_object_xpos_by_name(self._root_body_name, 'OBJ_BODY')[2]  # 获取当前根身体高度 Z
     relative_height = current_height - contact_point  # 计算相对于地面的高度
     error = np.abs(relative_height - self._goal_height_ref)  # 计算与目标高度的误差
 
@@ -254,7 +254,7 @@ def _calc_feet_separation_reward(self):
 
 def _calc_foot_frc_clock_reward(self, left_frc_fn, right_frc_fn):
     """基于时钟的脚部接触力奖励：根据步态相位协调脚部受力"""
-    desired_max_foot_frc = self._client.get_robot_mass() * 9.8 * 0.5  # 期望最大脚力（一半体重）
+    desired_max_foot_frc = self._client.get_robot_mass() * 9.8 * 0.5  # 期望最大脚力（一半体重） 1/2mg
     # desired_max_foot_frc = self._client.get_robot_mass()*10*1.2  # 替代计算方法
 
     # 归一化脚部受力到[-1,1]区间

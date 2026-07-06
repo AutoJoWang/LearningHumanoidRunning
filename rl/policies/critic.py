@@ -103,9 +103,6 @@ class FF_V(Critic):
 
         return value
 
-    def act(self, inputs):  # 不需要，已弃用
-        return self(inputs)
-
 
 class FF_Q(Critic):
     """前馈动作值函数网络 - 估计Q(s,a)"""
