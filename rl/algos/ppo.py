@@ -385,9 +385,13 @@ class PPO:
               n_itr,
               anneal_rate=1.0):
         """主训练循环"""
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        policy = policy.to(self.device)
+        critic = critic.to(self.device)
 
         # 初始化旧策略（用于重要性采样）
-        self.old_policy = deepcopy(policy)
+        self.old_policy = deepcopy(policy).to(self.device)
         self.policy = policy
         self.critic = critic
 
@@ -434,7 +438,26 @@ class PPO:
 
             # 并行采样经验
             batch = self.sample_parallel(env_fn, self.policy, self.critic, self.batch_size, self.max_traj_len, anneal=curr_anneal, term_thresh=curr_thresh)
-            observations, actions, returns, values, gae = map(torch.Tensor, batch.get())
+            # observations, actions, returns, values, gae = map(torch.Tensor, batch.get())
+            observations = torch.tensor(batch.states,
+                            dtype=torch.float32,
+                            device=self.device)
+
+            actions = torch.tensor(batch.actions,
+                                dtype=torch.float32,
+                                device=self.device)
+
+            returns = torch.tensor(batch.returns,
+                                dtype=torch.float32,
+                                device=self.device)
+
+            values = torch.tensor(batch.values,
+                                dtype=torch.float32,
+                                device=self.device)
+
+            gae = torch.tensor(batch.advantages,
+                            dtype=torch.float32,
+                            device=self.device)
 
             num_samples = batch.storage_size()
             elapsed = time.time() - sample_start_time
