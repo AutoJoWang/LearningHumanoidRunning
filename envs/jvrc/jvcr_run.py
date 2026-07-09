@@ -70,12 +70,12 @@ class JvrcRunEnv(mujoco_env.MujocoEnv):
         # self.task._swing_duration = 0.4  # 摆动相持续时间
         # self.task._stance_duration = 0.2  # 支撑相持续时间
 
-        self.task._total_duration = 0.25  # 总步态周期
-        self.task._swing_duration = 0.2  # 摆动相持续时间
-        self.task._stance_duration = 0.05  # 支撑相持续时间
+        # self.task._total_duration = 0.25  # 总步态周期
+        # self.task._swing_duration = 0.2  # 摆动相持续时间
+        # self.task._stance_duration = 0.05  # 支撑相持续时间
 
         # 重置任务状态
-        self.task.reset()
+        # self.task.reset()
 
         # 初始化JVRC机器人对象
         self.robot = robot.JVRC(pdgains.T, control_dt, self.actuators, self.interface)
@@ -103,7 +103,7 @@ class JvrcRunEnv(mujoco_env.MujocoEnv):
         self.action_space = np.zeros(action_space_size)
 
         # 设置观测空间
-        self.base_obs_len = 37  # 基础观测维度
+        self.base_obs_len = 37  # 基础观测维度，必须匹配task.get_obs()返回的观测维度
         self.observation_space = np.zeros(self.base_obs_len)
 
         # 重置模型
@@ -115,7 +115,7 @@ class JvrcRunEnv(mujoco_env.MujocoEnv):
         # 外部状态：时钟信号和步态模式
         clock = [np.sin(2 * np.pi * self.task._phase / self.task._period),
                  np.cos(2 * np.pi * self.task._phase / self.task._period)]  # 相位时钟信号
-        ext_state = np.concatenate((clock, self.task.mode.encode(), [self.task.mode_ref]))  # 外部状态
+        ext_state = np.concatenate((clock, self.task.mode.encode(), [self.task.command['vx']]))  # 外部状态
 
         # 内部状态：机器人状态
         qpos = np.copy(self.interface.get_qpos())  # 位置状态
@@ -195,6 +195,7 @@ class JvrcRunEnv(mujoco_env.MujocoEnv):
         )
 
         # 获取初始观测并重置任务
-        obs = self.get_obs()
         self.task.reset()
+        obs = self.get_obs()
+
         return obs

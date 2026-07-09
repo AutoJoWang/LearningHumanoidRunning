@@ -30,14 +30,12 @@ class WalkModes(Enum):
             return np.array([1, 0, 0])
 
     def sample_ref(self):
-        """为每种模式采样参考值"""
         if self.name == 'STANDING':
-            return np.random.uniform(0.8, 1.5)  # 站立模式参考值范围
+            return {'vx': 0, 'vy': 0, 'yaw': 0}
         if self.name == 'INPLACE':
-            return np.random.uniform(1.5, 2.1)  # 原地跑步角速度参考值
+            return {'vx': 0, 'vy': 0, 'yaw': 0}
         if self.name == 'FORWARD':
-            # return np.random.uniform(1.5, 2.1)  # 前进速度参考值(m/s)
-            return 6.0  # 前进速度参考值(m/s)
+            return {'vx': np.random.uniform(3, 6.5), 'vy': 0, 'yaw': 0}
 
 
 class RuningTask(object):
@@ -67,7 +65,7 @@ class RuningTask(object):
 
         # 这些参数依赖于具体机器人，目前硬编码
         # 理想情况下应该作为初始化参数传入
-        self.mode_ref = []  # 模式参考值
+        self.command = []  # 模式参考值
         self._goal_height_ref = []  # 目标高度参考
         self._swing_duration = []  # 摆动相持续时间
         self._stance_duration = []  # 支撑相持续时间
@@ -108,16 +106,7 @@ class RuningTask(object):
             r_vel = (lambda _: -1)  # 期望脚部静止
             l_vel = (lambda _: -1)
 
-        # 设置不同模式的目标速度
-        if self.mode == WalkModes.STANDING:
-            self._goal_speed_ref = self.mode_ref  # 使用采样得到的前进速度参考
-            yaw_vel_ref = 0  # 前进时偏航角速度为0
-        if self.mode == WalkModes.INPLACE:
-            self._goal_speed_ref = self.mode_ref  # 使用采样得到的前进速度参考
-            yaw_vel_ref = 0  # 前进时偏航角速度为0
-        if self.mode == WalkModes.FORWARD:
-            self._goal_speed_ref = self.mode_ref  # 使用采样得到的前进速度参考
-            yaw_vel_ref = 0  # 前进时偏航角速度为0
+        self._goal_speed_ref = self.command['vx']  
 
         # 警告：这里假设腿部关节在前12个位置
         reward = dict(
@@ -139,8 +128,9 @@ class RuningTask(object):
             # 高度奖励 - 基于颈部高度
             height_error=0.050 * neck_pos[2] + 0.3 * (self._client.get_object_xpos_by_name("PELVIS_S", 'OBJ_BODY')[2] - 0.85),
             # height_error=0.050 * rewards._calc_height_reward(self),  # 高度误差奖励
-            # 速度奖励 - 鼓励高速前进（目标速度6m/s）
-            vel_reward=0.2 + 0.2 * -abs(self._client.get_body_vel("PELVIS_S")[0][0] - 6.0),
+            # 速度奖励 
+            vel_reward=0.2 + 0.2 * -abs(self._client.get_body_vel("PELVIS_S")[0][0] - self._goal_speed_ref),
+            # vel_reward = np.exp(-2*(self._client.get_body_vel("PELVIS_S")[0][0] - self._goal_speed_ref)**2), 
             # 侧向和旋转速度惩罚
             # velocity_penalty=0.1 + 0.13 * (-abs(self._client.get_body_vel("PELVIS_S")[0][1]) - abs(self._client.get_body_vel("PELVIS_S")[0][5])),
             velocity_penalty=0.1*rewards._calc_orient_reward(self,'PELVIS_S'),
@@ -163,13 +153,15 @@ class RuningTask(object):
             self._phase = 0
 
         # 随机在INPLACE和STANDING模式之间切换（仅在双脚支撑期）
-        in_double_support = self.right_clock[0](self._phase) == 1 and self.left_clock[0](self._phase) == 1
+        in_double_support = self.right_clock[0](self._phase) >= 0.9 and self.left_clock[0](self._phase) >= 0.9
         if np.random.randint(100) == 0 and in_double_support:  # 1%的概率切换
             if self.mode == WalkModes.INPLACE:
                 self.mode = WalkModes.STANDING
             elif self.mode == WalkModes.STANDING:
                 self.mode = WalkModes.INPLACE
-            self.mode_ref = self.mode.sample_ref()  # 重新采样参考值
+            self.command = self.mode.sample_ref()  # 重新采样参考值
+            self.update_clock()  # 更新步态时钟函数
+            self._phase = np.random.randint(self._period)
 
         # 随机在INPLACE和FORWARD模式之间切换
         if np.random.randint(200) == 0 and self.mode != WalkModes.STANDING:  # 0.5%的概率切换
@@ -177,7 +169,9 @@ class RuningTask(object):
                 self.mode = WalkModes.INPLACE
             elif self.mode == WalkModes.INPLACE:
                 self.mode = WalkModes.FORWARD
-            self.mode_ref = self.mode.sample_ref()  # 重新采样参考值
+            self.command = self.mode.sample_ref()  # 重新采样参考值
+            self.update_clock()  # 更新步态时钟函数
+            self._phase = np.random.randint(self._period)
 
         # 操纵高度场（地形随机化）
         if self.manip_hfield:
@@ -204,14 +198,33 @@ class RuningTask(object):
 
     def reset(self, iter_count=0):
         """重置任务状态"""
-        # 随机选择行走模式（概率分布不同）
-        # self.mode = np.random.choice(
-        #     [WalkModes.STANDING, WalkModes.INPLACE, WalkModes.FORWARD],
-        #     p=[0.2, 0.3, 0.5])  # 站立5%，原地15%，前进80%
-        # self.mode_ref = self.mode.sample_ref()  # 采样模式参考值
+        # 随机选择行走模式（概率分布不同） 
+        self.mode = np.random.choice(
+            [WalkModes.STANDING, WalkModes.INPLACE, WalkModes.FORWARD],
+            p=[0.2, 0.4, 0.4])  
+        self.command = self.mode.sample_ref()  # 采样模式参考值
 
-        self.mode = WalkModes.FORWARD
-        self.mode_ref = 1.0  # 固定高速目标
+        # self.mode = WalkModes.FORWARD
+        #self.command = self.mode.sample_ref()  # 采样模式参考值
+
+        self.update_clock()  # 更新步态时钟函数
+
+        # 在初始化时随机化相位
+        self._phase = np.random.randint(0, self._period)
+
+    def update_clock(self):
+        """更新步态时钟函数（在每个控制步调用）"""
+        # 根据当前模式更新摆动和支撑相持续时间
+        if self.mode == WalkModes.STANDING:
+            self._swing_duration = 0.001  # 站立无摆动
+            self._stance_duration = 1.0
+        elif self.mode == WalkModes.INPLACE:
+            self._swing_duration = 0.25
+            self._stance_duration = 0.35
+        elif self.mode == WalkModes.FORWARD:
+            self._swing_duration = 0.2
+            self._stance_duration = 0.05
+        self._total_duration = self._swing_duration + self._stance_duration
 
         # 创建步态相位时钟函数
         self.right_clock, self.left_clock = rewards.create_phase_reward(
@@ -222,7 +235,5 @@ class RuningTask(object):
             1 / self._control_dt  # 控制频率
         )
 
-        # 计算完整步态周期的控制步数（左摆动+右摆动）
+        # 更新完整步态周期的控制步数（左摆动+右摆动）
         self._period = np.floor(2 * self._total_duration * (1 / self._control_dt))
-        # 在初始化时随机化相位
-        self._phase = np.random.randint(0, self._period)
