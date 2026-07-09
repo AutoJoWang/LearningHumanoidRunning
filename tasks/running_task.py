@@ -35,7 +35,7 @@ class WalkModes(Enum):
         if self.name == 'INPLACE':
             return {'vx': 0, 'vy': 0, 'yaw': 0}
         if self.name == 'FORWARD':
-            return {'vx': np.random.uniform(3, 6.5), 'vy': 0, 'yaw': 0}
+            return {'vx': np.random.uniform(5, 6.5), 'vy': 0, 'yaw': 0}
 
 
 class RuningTask(object):
@@ -201,7 +201,7 @@ class RuningTask(object):
         # 随机选择行走模式（概率分布不同） 
         self.mode = np.random.choice(
             [WalkModes.STANDING, WalkModes.INPLACE, WalkModes.FORWARD],
-            p=[0.2, 0.4, 0.4])  
+            p=[0.1, 0.2, 0.7])  
         self.command = self.mode.sample_ref()  # 采样模式参考值
 
         # self.mode = WalkModes.FORWARD
