@@ -26,7 +26,8 @@ class WalkModes(Enum):
         if self.name == 'INPLACE':
             return np.random.uniform(-0.5, 0.5)  # 原地踏步：随机偏航角速度
         if self.name == 'FORWARD':
-            return np.random.uniform(0., 0.4)  # 前进：随机前进速度
+            # return np.random.uniform(3., 4.)  # 前进：随机前进速度
+            return 1.1  # 前进：固定前进速度
 
 
 class WalkingTask(object):
@@ -191,13 +192,16 @@ class WalkingTask(object):
     def reset(self, iter_count=0):
         """重置任务状态"""
 
-        # 随机选择行走模式（带概率权重）
-        self.mode = np.random.choice(
-            [WalkModes.STANDING, WalkModes.INPLACE, WalkModes.FORWARD],
-            p=[0.6, 0.2, 0.2])  # 站立60%，原地踏步20%，前进20%
+        # # 随机选择行走模式（带概率权重）
+        # self.mode = np.random.choice(
+        #     [WalkModes.STANDING, WalkModes.INPLACE, WalkModes.FORWARD],
+        #     p=[0.6, 0.2, 0.2])  # 站立60%，原地踏步20%，前进20%
 
         # 采样模式参考值
-        self.mode_ref = self.mode.sample_ref()
+        # self.mode_ref = self.mode.sample_ref()
+
+        self.mode = WalkModes.FORWARD  # 默认选择前进模式
+        self.mode_ref = 1.1  # 固定前进速度参考值
 
         # 创建相位时钟函数（用于奖励计算）
         self.right_clock, self.left_clock = rewards.create_phase_reward(
