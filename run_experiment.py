@@ -121,7 +121,7 @@ if __name__ == "__main__":
     parser.add_argument("--env", required=True, type=str)                        # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--seed", default=0, type=int)                        # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--logdir", type=str, default="./logs_dir/")          # Where to log diagnostics to
-    parser.add_argument("--input_norm_steps", type=int, default=100000)
+    parser.add_argument("--input_norm_steps", type=int, default=10000)
     parser.add_argument("--n_itr", type=int, default=2000, help="Number of iterations of the learning algorithm")
     parser.add_argument("--lr", type=float, default=1e-4, help="Adam learning rate") # Xie
     parser.add_argument("--eps", type=float, default=1e-5, help="Adam epsilon (for numerical stability)")

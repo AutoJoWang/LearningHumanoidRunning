@@ -52,6 +52,10 @@ Environment names supported:
 ```
 $ python run_experiment.py train --logdir <path_to_exp_dir> --num_procs <num_of_cpu_procs> --env <name_of_environment>
 ```  
+export RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE=1
+export OMP_NUM_THREADS=1
+
+python run_experiment.py train --logdir logs/walk --num_procs 10 --env jvrc_walk
 
 
 #### **To play:**
