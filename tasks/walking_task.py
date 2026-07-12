@@ -27,7 +27,7 @@ class WalkModes(Enum):
             return np.random.uniform(-0.5, 0.5)  # 原地踏步：随机偏航角速度
         if self.name == 'FORWARD':
             # return np.random.uniform(3., 4.)  # 前进：随机前进速度
-            return 1.1  # 前进：固定前进速度
+            return 2.1  # 前进：固定前进速度
 
 
 class WalkingTask(object):
@@ -121,9 +121,10 @@ class WalkingTask(object):
             # 高度误差奖励：鼓励维持目标高度
             height_error=0.050 * rewards._calc_height_reward(self),
             # 质心速度误差奖励：鼓励达到目标前进速度
-            com_vel_error=0.150 * rewards._calc_fwd_vel_reward(self),
+            # com_vel_error=0.150 * rewards._calc_fwd_vel_reward(self),
+            vel_reward=0.2 + 0.2 * -abs(self._client.get_body_vel("PELVIS_S")[0][0] - 2.1),
             # 偏航角速度误差奖励：鼓励达到目标偏航角速度
-            yaw_vel_error=0.150 * rewards._calc_yaw_vel_reward(self, yaw_vel_ref),
+            yaw_vel_error=0.150 * rewards._calc_yaw_vel_reward(self, 0),#原传入yaw_vel_ref
             # 上半身奖励：鼓励头部相对骨盆稳定
             upper_body_reward=0.050 * np.exp(-10 * np.linalg.norm(head_pos - root_pos)),
             # 姿势误差奖励：鼓励接近中立姿势
@@ -201,7 +202,7 @@ class WalkingTask(object):
         # self.mode_ref = self.mode.sample_ref()
 
         self.mode = WalkModes.FORWARD  # 默认选择前进模式
-        self.mode_ref = 1.1  # 固定前进速度参考值
+        self.mode_ref = 2.1  # 固定前进速度参考值
 
         # 创建相位时钟函数（用于奖励计算）
         self.right_clock, self.left_clock = rewards.create_phase_reward(
